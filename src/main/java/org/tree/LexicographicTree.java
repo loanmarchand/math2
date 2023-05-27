@@ -5,7 +5,6 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.util.*;
-import java.util.regex.Pattern;
 
 public class LexicographicTree {
 
@@ -15,13 +14,30 @@ public class LexicographicTree {
 	private final Node root;
 	private int size;
 
-	private static class Node{
-		private final Map<Character,Node> children;
+	public static class Node {
+		private Node[] children;
 		private boolean isEndOfWord;
 
 		public Node() {
-			children = new HashMap<>();
+			children = null;
 			isEndOfWord = false;
+		}
+
+
+		public Node[] getChildren() {
+			if (children == null) {
+				children = new Node[28];
+			}
+			return children;
+		}
+
+
+		public boolean isEndOfWord() {
+			return isEndOfWord;
+		}
+
+		public void setEndOfWord(boolean isEndOfWord) {
+			this.isEndOfWord = isEndOfWord;
 		}
 	}
 	/*
@@ -32,7 +48,6 @@ public class LexicographicTree {
 	 * Constructor : creates an empty lexicographic tree.
 	 */
 	public LexicographicTree() {
-		// TODO
 		root = new Node();
 		size = 0;
 	}
@@ -42,11 +57,10 @@ public class LexicographicTree {
 	 * @param filename A text file containing the words to be inserted in the tree
 	 */
 	public LexicographicTree(String filename) {
-		// TODO
 		this();
-		try(BufferedReader br = new BufferedReader(new FileReader(filename))) {
+		try(BufferedReader reader = new BufferedReader(new FileReader(filename))){
 			String line;
-			while((line = br.readLine()) != null) {
+			while ((line = reader.readLine()) != null){
 				insertWord(line);
 			}
 		} catch (Exception e) {
@@ -64,25 +78,35 @@ public class LexicographicTree {
 	 * @return The number of words present in the lexicographic tree
 	 */
 	public int size() {
-		return size; // TODO
+		return size;
 	}
+
 
 	/**
 	 * Inserts a word in the lexicographic tree if not already present.
 	 * @param word A word
 	 */
 	public void insertWord(String word) {
-
+		word = sanitize(word);
 		Node current = root;
 		for (int i = 0; i < word.length(); i++) {
 			char c = word.charAt(i);
-			if (!current.children.containsKey(c)) {
-				current.children.put(c, new Node());
+			if (!Character.isLetter(c) && c != '-' && c != '\'') {
+				continue;
 			}
-			current = current.children.get(c);
+			Node[] children = current.getChildren();
+			Node child = children[getIndex(c)];
+			if (child == null) {
+				child = new Node();
+				children[getIndex(c)] = child;
+			}
+			current = child;
 		}
-		current.isEndOfWord = true;
-		size++;
+
+		if (!current.isEndOfWord()) {
+			current.setEndOfWord(true);
+			size++;
+		}
 	}
 
 
@@ -92,24 +116,18 @@ public class LexicographicTree {
 	 * @return True if the word is present, false otherwise
 	 */
 	public boolean containsWord(String word) {
-		if (word == null) {
-			throw new IllegalArgumentException("The word to search cannot be null");
-		}
+		word = sanitize(word);
+		Node current = getNode(word);
+		if (current == null) return false;
 
-		word = word.toLowerCase().replaceAll("[^a-z\\-']", "");
-		if (word.isEmpty()) {
-			return false;
-		}
+		return current.isEndOfWord();
+	}
 
-		Node node = root;
-		for (Character c: word.toCharArray()) {
-			Node child = node.children.get(c);
-			if (child == null) {
-				return false;
-			}
-			node = child;
-		}
-		return node.isEndOfWord;
+
+
+	public boolean isPrefix(String word) {
+		Node current = getNode(word);
+		return current != null;
 	}
 
 	/**
@@ -119,23 +137,22 @@ public class LexicographicTree {
 	 * @return The list of words starting with the supplied prefix
 	 */
 	public List<String> getWords(String prefix) {
-		if (prefix == null) {
-			throw new IllegalArgumentException("The prefix cannot be null");
-		}
-
-		prefix = prefix.toLowerCase().replaceAll("[^a-z\\-']", "");
-		Node node = root;
-		for (Character c: prefix.toCharArray()) {
-			Node child = node.children.get(c);
-			if (child == null) {
-				return Collections.emptyList();
-			}
-			node = child;
-		}
-
+		prefix = sanitize(prefix);
 		List<String> words = new ArrayList<>();
-		collectWords(node, prefix, words);
-		Collections.sort(words);
+		Node current = root;
+
+		// On parcourt le préfixe
+		for (int i = 0; i < prefix.length(); i++) {
+			char c = prefix.charAt(i);
+			Node[] children = current.getChildren();
+			Node child = children[getIndex(c)];
+			if (child == null) {
+				// Si un caractère du préfixe ne correspond à aucun nœud de l'arbre, on retourne une liste vide
+				return words;
+			}
+			current = child;
+		}
+		getWords(current, new StringBuilder(prefix), words);
 		return words;
 	}
 
@@ -148,14 +165,16 @@ public class LexicographicTree {
 	 */
 	public List<String> getWordsOfLength(int length) {
 		if (length <= 0) {
-			return Collections.emptyList();
+			return new ArrayList<>();
 		}
-
 		List<String> words = new ArrayList<>();
-		collectWordsOfLength(root, "", length, words);
-		Collections.sort(words);
+		char[] prefix = new char[length];
+		getWordsOfLength(root, prefix, length, words, 0);
 		return words;
 	}
+
+
+
 
 
 
@@ -163,53 +182,95 @@ public class LexicographicTree {
 	 * PRIVATE METHODS
 	 */
 
-	/**
-	 * Sanitizes a word by removing all non-alphabetic characters and converting it to lowercase.
-	 * @param word A word
-	 * @return The sanitized word
-	 */
-	private String sanitizeWord(String word) {
-		Pattern PATTERN = Pattern.compile("[^a-zA-Z\\-']");
+	private void getWords(Node node, StringBuilder prefix, List<String> words) {
+		if (node.isEndOfWord()) {
+			// Si le nœud correspond à la fin d'un mot, on l'ajoute à la liste
+			words.add(prefix.toString());
+		}
 
-		return PATTERN.matcher(word).replaceAll("").toLowerCase();
+		// On parcourt tous les enfants du nœud actuel
+		for (char c = 'a'; c <= 'z'; c++) {
+			Node[] children = node.getChildren();
+			Node child = children[c - 'a'];
+			if (child != null) {
+				// Si l'enfant existe, on l'ajoute au préfixe et on appelle la méthode récursive avec ce nœud
+				prefix.append(c);
+				getWords(child, prefix, words);
+				prefix.deleteCharAt(prefix.length() - 1);
+			}
+		}
+
+		// On gère les cas spéciaux pour les caractères "-" et "'"
+		Node[] children = node.getChildren();
+		Node child = children[26];
+		if (child != null) {
+			prefix.append('-');
+			getWords(child, prefix, words);
+			prefix.deleteCharAt(prefix.length() - 1);
+		}
+
+		child = children[27];
+		if (child != null) {
+			prefix.append('\'');
+			getWords(child, prefix, words);
+			prefix.deleteCharAt(prefix.length() - 1);
+		}
+
 	}
 
+	private void getWordsOfLength(Node node, char[] prefix, int length, List<String> words, int i) {
+		if (node.isEndOfWord() && i == length) {
+			words.add(new String(prefix));
+		}
 
-	/**
-	 * Collects all words of a given length starting from a given node.
-	 * @param root The node from which to start the collection
-	 * @param s The current word
-	 * @param length The expected length
-	 * @param words The list of words to be populated
-	 */
-	private void collectWordsOfLength(Node root, String s, int length, List<String> words) {
-		if (s.length() == length) {
-			if (root.isEndOfWord) {
-				words.add(s);
-			}
+		if (i == length) {
 			return;
 		}
 
-		for (Map.Entry<Character, Node> entry : root.children.entrySet()) {
-			collectWordsOfLength(entry.getValue(), s + entry.getKey(), length, words);
+		Node[] children = node.getChildren();
+		for (int j = 0; j < children.length; j++) {
+			Node child = children[j];
+			if (child != null) {
+				prefix[i] = (char) (j == 26 ? '-' : j == 27 ? '\'' : j + 'a');
+				getWordsOfLength(child, prefix, length, words, i + 1);
+			}
 		}
 	}
 
-	/**
-	 * Collects all words starting from a given node.
-	 * @param node The node from which to start the collection
-	 * @param prefix The current prefix
-	 * @param words The list of words to be populated
-	 */
-	private void collectWords(Node node, String prefix, List<String> words) {
-		if (node.isEndOfWord) {
-			words.add(prefix);
+	private Node getNode(String word) {
+		word = sanitize(word);
+		Node current = root;
+		for (int i = 0; i < word.length(); i++) {
+			char c = word.charAt(i);
+			Node[] children = current.getChildren();
+			if (children.length <= getIndex(c)) {
+				return null;
+			}
+			Node child = children[getIndex(c)];
+			if (child == null) {
+				return null;
+			}
+			current = child;
 		}
-
-		for (Map.Entry<Character, Node> entry : node.children.entrySet()) {
-			collectWords(entry.getValue(), prefix + entry.getKey(), words);
-		}
+		return current;
 	}
+
+	private String sanitize(String word) {
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < word.length(); i++) {
+			char c = word.charAt(i);
+			if (Character.isLetter(c) || c == '-' || c == '\'') {
+				sb.append(c);
+			}
+		}
+		return sb.toString().toLowerCase();
+	}
+
+	private int getIndex(char c) {
+		return c == '-' ? 26 : c == '\'' ? 27 : c - 'a';
+	}
+
+
 
 
 	/*
